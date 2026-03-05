@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, DM_Sans, JetBrains_Mono } from 'next/font/google';
 import { Topbar } from '@/components/layout/Topbar';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Footer } from '@/components/layout/Footer';
+import { NewsletterPopup } from '@/components/shared/NewsletterPopup';
 import './globals.css';
 
 const mono = IBM_Plex_Mono({
@@ -44,6 +45,7 @@ export default function RootLayout({
           </main>
         </div>
         <Footer />
+        <NewsletterPopup />
       </body>
     </html>
   );

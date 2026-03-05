@@ -15,7 +15,7 @@ function getHeliusUrl() {
   return `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 }
 
-async function rpcCall(method: string, params: unknown[]) {
+async function rpcCall(method: string, params: unknown[] | Record<string, unknown>) {
   const res = await fetch(getHeliusUrl(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -44,14 +44,12 @@ async function fetchBalance(address: string): Promise<number> {
 }
 
 async function fetchAssets(address: string): Promise<TokenHolding[]> {
-  const result = await rpcCall('getAssetsByOwner', [
-    {
-      ownerAddress: address,
-      page: 1,
-      limit: 100,
-      displayOptions: { showFungible: true, showNativeBalance: false },
-    },
-  ]);
+  const result = await rpcCall('getAssetsByOwner', {
+    ownerAddress: address,
+    page: 1,
+    limit: 100,
+    displayOptions: { showFungible: true, showNativeBalance: false },
+  });
 
   const items = result?.items ?? [];
   const holdings: TokenHolding[] = [];

@@ -1,29 +1,34 @@
 import { NextResponse } from 'next/server';
 import type { PerpsProtocol, Liquidation, FundingRate, PerpsOverview } from '@/types/perps';
 
-const SOLANA_PERP_SLUGS: Record<string, string> = {
-  'jupiter-perpetual': 'Jupiter Perps',
-  'drift-protocol': 'Drift',
-  'zeta-markets': 'Zeta Markets',
-  'flash-trade': 'Flash Trade',
-  'parcl': 'Parcl',
+export const dynamic = 'force-dynamic';
+export const revalidate = 300; // revalidate every 5 minutes
+
+// Map: DeFiLlama module name → display name + protocol slug for /protocol/ endpoint
+const SOLANA_PERPS: Record<string, { display: string; protocolSlug: string; markets: number }> = {
+  'jupiter-perpetual': { display: 'Jupiter Perps', protocolSlug: 'jupiter-perpetual', markets: 12 },
+  'drift-protocol-derivatives': { display: 'Drift', protocolSlug: 'drift', markets: 24 },
+  'flash-trade': { display: 'Flash Trade', protocolSlug: 'flash-trade', markets: 8 },
+  'flashtrade': { display: 'Flash Trade', protocolSlug: 'flash-trade', markets: 8 },
+  'parcl': { display: 'Parcl', protocolSlug: 'parcl', markets: 6 },
+  'zeta-markets': { display: 'Zeta Markets', protocolSlug: 'zeta-markets', markets: 15 },
+  'adrena': { display: 'Adrena', protocolSlug: 'adrena', markets: 4 },
 };
 
-// Exact names used in DeFiLlama derivatives overview
-const DEFILLAMA_NAMES: Record<string, string> = {
-  'jupiter-perpetual': 'Jupiter Perpetual',
-  'drift-protocol': 'Drift',
-  'zeta-markets': 'Zeta Markets',
-  'flash-trade': 'Flash Trade',
-  'parcl': 'Parcl',
-};
-
-const MARKET_COUNTS: Record<string, number> = {
-  'jupiter-perpetual': 12,
-  'drift-protocol': 24,
-  'zeta-markets': 15,
-  'flash-trade': 8,
-  'parcl': 6,
+// Known DeFiLlama names → module (for matching overview responses)
+const NAME_TO_MODULE: Record<string, string> = {
+  'jupiter perpetual exchange': 'jupiter-perpetual',
+  'jupiter perpetual': 'jupiter-perpetual',
+  'drift trade': 'drift-protocol-derivatives',
+  'drift': 'drift-protocol-derivatives',
+  'flash trade': 'flash-trade',
+  'flashtrade': 'flashtrade',
+  'parcl v3': 'parcl',
+  'parcl': 'parcl',
+  'zeta markets': 'zeta-markets',
+  'zeta': 'zeta-markets',
+  'adrena protocol': 'adrena',
+  'adrena': 'adrena',
 };
 
 const SAMPLE_MARKETS = ['SOL-PERP', 'BTC-PERP', 'ETH-PERP'];
@@ -38,7 +43,7 @@ function generateSampleFundingRates(protocol: string): FundingRate[] {
 }
 
 function generateSampleLiquidations(): Liquidation[] {
-  const protocols = Object.values(SOLANA_PERP_SLUGS);
+  const protocols = ['Jupiter Perps', 'Drift', 'Flash Trade', 'Zeta Markets', 'Parcl'];
   const now = Math.floor(Date.now() / 1000);
 
   return Array.from({ length: 15 }, (_, i) => ({
@@ -55,9 +60,48 @@ function generateSampleLiquidations(): Liquidation[] {
   }));
 }
 
+interface OverviewProtocol {
+  name?: string;
+  module?: string;
+  total24h?: number;
+  totalAllTime?: number;
+  change_1d?: number;
+  chains?: string[];
+}
+
+function matchModule(p: OverviewProtocol): string | null {
+  // Try module field first
+  if (p.module && SOLANA_PERPS[p.module]) return p.module;
+  // Try name matching
+  const name = (p.name ?? '').toLowerCase();
+  if (NAME_TO_MODULE[name]) return NAME_TO_MODULE[name];
+  return null;
+}
+
+async function fetchOverview(type: 'derivatives' | 'fees'): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  try {
+    const res = await fetch(
+      `https://api.llama.fi/overview/${type}?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true`,
+      { next: { revalidate: 300 } }
+    );
+    if (!res.ok) return result;
+    const data = await res.json();
+    const protocols: OverviewProtocol[] = data.protocols ?? [];
+    for (const p of protocols) {
+      if (!p.chains?.includes('Solana')) continue;
+      const mod = matchModule(p);
+      if (mod) {
+        result[mod] = p.total24h ?? 0;
+      }
+    }
+  } catch { /* ignore */ }
+  return result;
+}
+
 async function fetchProtocolTvl(slug: string): Promise<number> {
   try {
-    const res = await fetch(`https://api.llama.fi/protocol/${slug}`, { next: { revalidate: 300 } });
+    const res = await fetch(`https://api.llama.fi/protocol/${slug}`, { next: { revalidate: 600 } });
     if (!res.ok) return 0;
     const data = await res.json();
     return data.currentChainTvls?.Solana ?? data.tvl ?? 0;
@@ -66,132 +110,61 @@ async function fetchProtocolTvl(slug: string): Promise<number> {
   }
 }
 
-async function fetchDerivativesSummary(slug: string): Promise<number> {
-  try {
-    const res = await fetch(`https://api.llama.fi/summary/derivatives/${slug}`, { next: { revalidate: 300 } });
-    if (!res.ok) return 0;
-    const data = await res.json();
-    // Try to extract OI from the response
-    if (data.currentOI) return data.currentOI;
-    if (data.totalDataChart?.length) {
-      const latest = data.totalDataChart[data.totalDataChart.length - 1];
-      if (latest?.openInterest) return latest.openInterest;
-    }
-    return 0;
-  } catch {
-    return 0;
-  }
-}
-
-async function fetchDefiLlamaProtocols(): Promise<Partial<PerpsProtocol>[]> {
-  const slugs = Object.keys(SOLANA_PERP_SLUGS);
-
-  // Fetch TVL and OI for each protocol in parallel
-  const [tvls, ois] = await Promise.all([
-    Promise.all(slugs.map(slug => fetchProtocolTvl(slug))),
-    Promise.all(slugs.map(slug => fetchDerivativesSummary(slug))),
-  ]);
-
-  return slugs.map((slug, i) => {
-    const tvl = tvls[i];
-    const oi = ois[i];
-    return {
-      name: SOLANA_PERP_SLUGS[slug],
-      slug,
-      tvl,
-      totalOI: oi > 0 ? oi : (tvl > 0 ? Math.round(tvl * 2.5) : 0),
-      markets: MARKET_COUNTS[slug] ?? 0,
-    };
-  });
-}
-
-async function fetchDefiLlamaVolumes(): Promise<Record<string, { volume24h: number; fees24h: number }>> {
-  const [volRes, feesRes] = await Promise.allSettled([
-    fetch('https://api.llama.fi/overview/derivatives?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true', { next: { revalidate: 60 } }),
-    fetch('https://api.llama.fi/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true', { next: { revalidate: 60 } }),
-  ]);
-
-  // Build reverse lookup: lowercase DeFiLlama name -> slug
-  const nameToSlug: Record<string, string> = {};
-  for (const [slug, dlName] of Object.entries(DEFILLAMA_NAMES)) {
-    nameToSlug[dlName.toLowerCase()] = slug;
-  }
-
-  const volumes: Record<string, { volume24h: number; fees24h: number }> = {};
-
-  if (volRes.status === 'fulfilled' && volRes.value.ok) {
-    const data = await volRes.value.json();
-    const prots: Array<{
-      name?: string;
-      total24h?: number;
-    }> = data.protocols ?? [];
-
-    for (const p of prots) {
-      const name = p.name?.toLowerCase() ?? '';
-      const slug = nameToSlug[name];
-      if (slug) {
-        volumes[slug] = {
-          volume24h: p.total24h ?? 0,
-          fees24h: 0,
-        };
-      }
-    }
-  }
-
-  if (feesRes.status === 'fulfilled' && feesRes.value.ok) {
-    const data = await feesRes.value.json();
-    const prots: Array<{ name?: string; total24h?: number }> = data.protocols ?? [];
-
-    for (const p of prots) {
-      const name = p.name?.toLowerCase() ?? '';
-      const slug = nameToSlug[name];
-      if (slug) {
-        if (volumes[slug]) {
-          volumes[slug].fees24h = p.total24h ?? 0;
-        } else {
-          volumes[slug] = { volume24h: 0, fees24h: p.total24h ?? 0 };
-        }
-      }
-    }
-  }
-
-  return volumes;
-}
-
 export async function GET() {
   try {
-    const [protocolResults, volumeResults] = await Promise.allSettled([
-      fetchDefiLlamaProtocols(),
-      fetchDefiLlamaVolumes(),
+    // Fetch fees, volume, and TVL in parallel
+    const [feesMap, volumeMap, tvls] = await Promise.all([
+      fetchOverview('fees'),
+      fetchOverview('derivatives'),
+      // Fetch TVL for unique protocol slugs
+      (async () => {
+        const uniqueSlugs = [...new Set(
+          Object.values(SOLANA_PERPS).map(p => p.protocolSlug)
+        )];
+        const results = await Promise.all(
+          uniqueSlugs.map(async (slug) => {
+            const tvl = await fetchProtocolTvl(slug);
+            return [slug, tvl] as const;
+          })
+        );
+        return Object.fromEntries(results) as Record<string, number>;
+      })(),
     ]);
 
-    const partials = protocolResults.status === 'fulfilled' ? protocolResults.value : [];
-    const volumes = volumeResults.status === 'fulfilled' ? volumeResults.value : {};
+    // Deduplicate modules (flashtrade and flash-trade map to same protocol)
+    const seen = new Set<string>();
+    const protocols: PerpsProtocol[] = [];
 
-    const protocols: PerpsProtocol[] = partials.length > 0
-      ? partials.map((p) => {
-          const vol = volumes[p.slug ?? ''];
-          return {
-            name: p.name ?? 'Unknown',
-            slug: p.slug ?? '',
-            totalOI: p.totalOI ?? 0,
-            volume24h: vol?.volume24h ?? 0,
-            fees24h: vol?.fees24h ?? 0,
-            tvl: p.tvl ?? 0,
-            markets: p.markets ?? 0,
-            fundingRates: generateSampleFundingRates(p.slug ?? ''),
-          };
-        })
-      : Object.entries(SOLANA_PERP_SLUGS).map(([slug, name]) => ({
-          name,
-          slug,
-          totalOI: 0,
-          volume24h: volumes[slug]?.volume24h ?? 0,
-          fees24h: volumes[slug]?.fees24h ?? 0,
-          tvl: 0,
-          markets: MARKET_COUNTS[slug] ?? 0,
-          fundingRates: generateSampleFundingRates(slug),
-        }));
+    for (const [mod, info] of Object.entries(SOLANA_PERPS)) {
+      if (seen.has(info.protocolSlug)) continue;
+      seen.add(info.protocolSlug);
+
+      const tvl = tvls[info.protocolSlug] ?? 0;
+      // Check both module variants for fees/volume
+      // Check all module variants that map to this protocolSlug
+      const altMods = Object.entries(SOLANA_PERPS)
+        .filter(([, v]) => v.protocolSlug === info.protocolSlug)
+        .map(([k]) => k);
+      const fees24h = altMods.reduce((v, m) => v || feesMap[m], 0 as number) || 0;
+      const volume24h = altMods.reduce((v, m) => v || volumeMap[m], 0 as number) || 0;
+
+      // Use TVL * 2.5 as OI proxy when no direct OI data available
+      const totalOI = tvl > 0 ? Math.round(tvl * 2.5) : 0;
+
+      protocols.push({
+        name: info.display,
+        slug: info.protocolSlug,
+        totalOI,
+        volume24h,
+        fees24h,
+        tvl,
+        markets: info.markets,
+        fundingRates: generateSampleFundingRates(info.protocolSlug),
+      });
+    }
+
+    // Sort by fees (most active first)
+    protocols.sort((a, b) => b.fees24h - a.fees24h);
 
     const totalOI = protocols.reduce((sum, p) => sum + p.totalOI, 0);
     const totalVolume24h = protocols.reduce((sum, p) => sum + p.volume24h, 0);

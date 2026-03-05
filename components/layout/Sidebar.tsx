@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const MODULES = [
+  { href: '/overview', label: 'Overview', icon: '~' },
   { href: '/wallet', label: 'Wallet Profiler', icon: '>' },
   { href: '/tokens', label: 'Token Intel', icon: '>' },
   { href: '/perps', label: 'Perp Analytics', icon: '>' },
