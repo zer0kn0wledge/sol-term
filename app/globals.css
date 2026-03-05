@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0e14;
+  --surface: #111820;
+  --surface-hover: #1a2230;
+  --border: #1e2a3a;
+  --border-bright: #2a3a4e;
+  --text: #e0e6ed;
+  --text-dim: #6b7d93;
+  --text-muted: #3d4f63;
+  --accent: #00d4aa;
+  --accent-dim: #00d4aa33;
+  --green: #00e396;
+  --green-dim: #00e39622;
+  --red: #ff4560;
+  --red-dim: #ff456022;
+  --yellow: #feb019;
+  --yellow-dim: #feb01922;
+  --blue: #008ffb;
+  --blue-dim: #008ffb22;
+  --purple: #9b59b6;
+  --purple-dim: #9b59b622;
+  --glow: 0 0 20px rgba(0, 212, 170, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-bright);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Glass card */
+.glass-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+}
+.glass-card:hover {
+  border-color: var(--border-bright);
+}
+
+/* Glow effects */
+.glow-accent {
+  box-shadow: var(--glow);
+}
+
+/* Pulse animation for skeletons */
+@keyframes pulse-dim {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.3; }
+}
+.animate-pulse-dim {
+  animation: pulse-dim 2s ease-in-out infinite;
+}
+
+/* Recharts overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: var(--border);
+}
+.recharts-text {
+  fill: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+/* Drawer slide-in */
+@keyframes slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.animate-slide-in {
+  animation: slide-in 0.2s ease-out;
+}
