@@ -17,6 +17,11 @@ const KNOWN_TOKENS: Record<string, { symbol: string; category: TokenCategory }> 
   'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3': { symbol: 'PYTH', category: 'defi' },
   '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': { symbol: 'W', category: 'defi' },
   'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL': { symbol: 'JTO', category: 'defi' },
+  'rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof': { symbol: 'RENDER', category: 'defi' },
+  'HaP8r1EE4K3YTFiHBiAnSR1MP2ZvsBzKfbRi3SgWbuYj': { symbol: 'TRUMP', category: 'meme' },
+  '5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm': { symbol: 'INF', category: 'lst' },
+  'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS': { symbol: 'KMNO', category: 'defi' },
+  'TNSRxcUxoT9xBG3de7PiJyTDYu7kskLqcpddxnEJAS6': { symbol: 'TENSOR', category: 'defi' },
 };
 
 export function categorizeToken(mint: string, symbol: string): TokenCategory {

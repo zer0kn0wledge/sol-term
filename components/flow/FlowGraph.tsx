@@ -57,7 +57,8 @@ export function FlowGraph({ data, categories, topN }: FlowGraphProps) {
     const width = rect.width;
     const height = rect.height;
 
-    svg.attr('width', width).attr('height', height);
+    svg.attr('width', width).attr('height', height)
+      .attr('viewBox', `0 0 ${width} ${height}`);
 
     // Filter nodes by category and topN
     const filteredNodes = data.nodes
@@ -111,9 +112,20 @@ export function FlowGraph({ data, categories, topN }: FlowGraphProps) {
 
     svg.call(zoom);
 
-    // Cluster regions (faint backgrounds)
+    // Cluster regions (faint backgrounds) - create once, update on tick
     const categoryGroups = d3.group(simNodes, d => d.category);
     const clusterG = g.append('g').attr('class', 'clusters');
+
+    // Pre-create cluster circles
+    const clusterCircles = new Map<TokenCategory, d3.Selection<SVGCircleElement, unknown, null, undefined>>();
+    categoryGroups.forEach((nodes, category) => {
+      if (!categories[category]) return;
+      if (nodes.length < 2) return;
+      const circle = clusterG.append('circle')
+        .attr('fill', CATEGORY_COLORS[category])
+        .attr('opacity', 0.05);
+      clusterCircles.set(category, circle);
+    });
 
     // Edges
     const edgeG = g.append('g').attr('class', 'edges');
@@ -209,7 +221,6 @@ export function FlowGraph({ data, categories, topN }: FlowGraphProps) {
         if (!event.active) simulation.alphaTarget(0.3).restart();
         d.fx = d.x;
         d.fy = d.y;
-        d3.select(event.sourceEvent.target).style('cursor', 'grabbing');
       })
       .on('drag', (event, d) => {
         d.fx = event.x;
@@ -219,7 +230,6 @@ export function FlowGraph({ data, categories, topN }: FlowGraphProps) {
         if (!event.active) simulation.alphaTarget(0);
         d.fx = null;
         d.fy = null;
-        d3.select(event.sourceEvent.target).style('cursor', 'grab');
       });
 
     nodeGroups.call(drag);
@@ -243,22 +253,16 @@ export function FlowGraph({ data, categories, topN }: FlowGraphProps) {
 
         nodeGroups.attr('transform', d => `translate(${d.x},${d.y})`);
 
-        // Update cluster regions
-        clusterG.selectAll('circle').remove();
+        // Update cluster region positions
         categoryGroups.forEach((nodes, category) => {
-          if (!categories[category]) return;
-          if (nodes.length < 2) return;
+          const circle = clusterCircles.get(category);
+          if (!circle) return;
           const cx = d3.mean(nodes, n => n.x) ?? 0;
           const cy = d3.mean(nodes, n => n.y) ?? 0;
           const maxDist = d3.max(nodes, n =>
             Math.sqrt((n.x! - cx) ** 2 + (n.y! - cy) ** 2) + n.r
           ) ?? 50;
-          clusterG.append('circle')
-            .attr('cx', cx)
-            .attr('cy', cy)
-            .attr('r', maxDist + 30)
-            .attr('fill', CATEGORY_COLORS[category])
-            .attr('opacity', 0.05);
+          circle.attr('cx', cx).attr('cy', cy).attr('r', maxDist + 30);
         });
       });
 

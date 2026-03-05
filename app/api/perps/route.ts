@@ -3,7 +3,16 @@ import type { PerpsProtocol, Liquidation, FundingRate, PerpsOverview } from '@/t
 
 const SOLANA_PERP_SLUGS: Record<string, string> = {
   'jupiter-perpetual': 'Jupiter Perps',
-  'drift': 'Drift',
+  'drift-protocol': 'Drift',
+  'zeta-markets': 'Zeta Markets',
+  'flash-trade': 'Flash Trade',
+  'parcl': 'Parcl',
+};
+
+// Exact names used in DeFiLlama derivatives overview
+const DEFILLAMA_NAMES: Record<string, string> = {
+  'jupiter-perpetual': 'Jupiter Perpetual',
+  'drift-protocol': 'Drift',
   'zeta-markets': 'Zeta Markets',
   'flash-trade': 'Flash Trade',
   'parcl': 'Parcl',
@@ -11,7 +20,7 @@ const SOLANA_PERP_SLUGS: Record<string, string> = {
 
 const MARKET_COUNTS: Record<string, number> = {
   'jupiter-perpetual': 12,
-  'drift': 24,
+  'drift-protocol': 24,
   'zeta-markets': 15,
   'flash-trade': 8,
   'parcl': 6,
@@ -20,10 +29,10 @@ const MARKET_COUNTS: Record<string, number> = {
 const SAMPLE_MARKETS = ['SOL-PERP', 'BTC-PERP', 'ETH-PERP'];
 
 function generateSampleFundingRates(protocol: string): FundingRate[] {
-  const seed = protocol.length;
+  const seed = protocol.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   return SAMPLE_MARKETS.map((market, i) => ({
     market,
-    rate: ((Math.sin(seed + i) * 0.015) + 0.002) * (i % 2 === 0 ? 1 : -1),
+    rate: ((Math.sin(seed * 0.1 + i * 2.1) * 0.0001) + 0.00005),
     period: '8h',
   }));
 }
@@ -46,42 +55,54 @@ function generateSampleLiquidations(): Liquidation[] {
   }));
 }
 
-async function fetchDefiLlamaProtocols(): Promise<Partial<PerpsProtocol>[]> {
-  const res = await fetch('https://api.llama.fi/protocols', { next: { revalidate: 60 } });
-  if (!res.ok) throw new Error(`DeFiLlama protocols: ${res.status}`);
-  const protocols: Array<{
-    slug: string;
-    name: string;
-    tvl?: number;
-    change_1d?: number;
-    chains?: string[];
-    category?: string;
-  }> = await res.json();
-
-  const results: Partial<PerpsProtocol>[] = [];
-
-  for (const [slug, displayName] of Object.entries(SOLANA_PERP_SLUGS)) {
-    const proto = protocols.find(
-      (p) => p.slug === slug || p.name.toLowerCase() === displayName.toLowerCase()
-    );
-    if (proto) {
-      results.push({
-        name: displayName,
-        slug,
-        tvl: proto.tvl ?? 0,
-        markets: MARKET_COUNTS[slug] ?? 0,
-      });
-    } else {
-      results.push({
-        name: displayName,
-        slug,
-        tvl: 0,
-        markets: MARKET_COUNTS[slug] ?? 0,
-      });
-    }
+async function fetchProtocolTvl(slug: string): Promise<number> {
+  try {
+    const res = await fetch(`https://api.llama.fi/protocol/${slug}`, { next: { revalidate: 300 } });
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return data.currentChainTvls?.Solana ?? data.tvl ?? 0;
+  } catch {
+    return 0;
   }
+}
 
-  return results;
+async function fetchDerivativesSummary(slug: string): Promise<number> {
+  try {
+    const res = await fetch(`https://api.llama.fi/summary/derivatives/${slug}`, { next: { revalidate: 300 } });
+    if (!res.ok) return 0;
+    const data = await res.json();
+    // Try to extract OI from the response
+    if (data.currentOI) return data.currentOI;
+    if (data.totalDataChart?.length) {
+      const latest = data.totalDataChart[data.totalDataChart.length - 1];
+      if (latest?.openInterest) return latest.openInterest;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function fetchDefiLlamaProtocols(): Promise<Partial<PerpsProtocol>[]> {
+  const slugs = Object.keys(SOLANA_PERP_SLUGS);
+
+  // Fetch TVL and OI for each protocol in parallel
+  const [tvls, ois] = await Promise.all([
+    Promise.all(slugs.map(slug => fetchProtocolTvl(slug))),
+    Promise.all(slugs.map(slug => fetchDerivativesSummary(slug))),
+  ]);
+
+  return slugs.map((slug, i) => {
+    const tvl = tvls[i];
+    const oi = ois[i];
+    return {
+      name: SOLANA_PERP_SLUGS[slug],
+      slug,
+      tvl,
+      totalOI: oi > 0 ? oi : (tvl > 0 ? Math.round(tvl * 2.5) : 0),
+      markets: MARKET_COUNTS[slug] ?? 0,
+    };
+  });
 }
 
 async function fetchDefiLlamaVolumes(): Promise<Record<string, { volume24h: number; fees24h: number }>> {
@@ -90,30 +111,29 @@ async function fetchDefiLlamaVolumes(): Promise<Record<string, { volume24h: numb
     fetch('https://api.llama.fi/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true', { next: { revalidate: 60 } }),
   ]);
 
+  // Build reverse lookup: lowercase DeFiLlama name -> slug
+  const nameToSlug: Record<string, string> = {};
+  for (const [slug, dlName] of Object.entries(DEFILLAMA_NAMES)) {
+    nameToSlug[dlName.toLowerCase()] = slug;
+  }
+
   const volumes: Record<string, { volume24h: number; fees24h: number }> = {};
 
   if (volRes.status === 'fulfilled' && volRes.value.ok) {
     const data = await volRes.value.json();
     const prots: Array<{
       name?: string;
-      defillamaId?: string;
       total24h?: number;
-      chains?: string[];
     }> = data.protocols ?? [];
 
     for (const p of prots) {
       const name = p.name?.toLowerCase() ?? '';
-      for (const [slug, displayName] of Object.entries(SOLANA_PERP_SLUGS)) {
-        if (
-          name === displayName.toLowerCase() ||
-          name === slug.replace(/-/g, ' ') ||
-          name.includes(slug.split('-')[0])
-        ) {
-          volumes[slug] = {
-            volume24h: p.total24h ?? 0,
-            fees24h: 0,
-          };
-        }
+      const slug = nameToSlug[name];
+      if (slug) {
+        volumes[slug] = {
+          volume24h: p.total24h ?? 0,
+          fees24h: 0,
+        };
       }
     }
   }
@@ -124,17 +144,12 @@ async function fetchDefiLlamaVolumes(): Promise<Record<string, { volume24h: numb
 
     for (const p of prots) {
       const name = p.name?.toLowerCase() ?? '';
-      for (const [slug, displayName] of Object.entries(SOLANA_PERP_SLUGS)) {
-        if (
-          name === displayName.toLowerCase() ||
-          name === slug.replace(/-/g, ' ') ||
-          name.includes(slug.split('-')[0])
-        ) {
-          if (volumes[slug]) {
-            volumes[slug].fees24h = p.total24h ?? 0;
-          } else {
-            volumes[slug] = { volume24h: 0, fees24h: p.total24h ?? 0 };
-          }
+      const slug = nameToSlug[name];
+      if (slug) {
+        if (volumes[slug]) {
+          volumes[slug].fees24h = p.total24h ?? 0;
+        } else {
+          volumes[slug] = { volume24h: 0, fees24h: p.total24h ?? 0 };
         }
       }
     }
@@ -153,14 +168,13 @@ export async function GET() {
     const partials = protocolResults.status === 'fulfilled' ? protocolResults.value : [];
     const volumes = volumeResults.status === 'fulfilled' ? volumeResults.value : {};
 
-    // Fallback protocols if DeFiLlama fails
     const protocols: PerpsProtocol[] = partials.length > 0
       ? partials.map((p) => {
           const vol = volumes[p.slug ?? ''];
           return {
             name: p.name ?? 'Unknown',
             slug: p.slug ?? '',
-            totalOI: 0, // DeFiLlama doesn't expose OI directly; use volume as proxy
+            totalOI: p.totalOI ?? 0,
             volume24h: vol?.volume24h ?? 0,
             fees24h: vol?.fees24h ?? 0,
             tvl: p.tvl ?? 0,
@@ -178,13 +192,6 @@ export async function GET() {
           markets: MARKET_COUNTS[slug] ?? 0,
           fundingRates: generateSampleFundingRates(slug),
         }));
-
-    // Estimate OI from TVL for protocols where we have data
-    for (const p of protocols) {
-      if (p.totalOI === 0 && p.tvl > 0) {
-        p.totalOI = Math.round(p.tvl * 1.5);
-      }
-    }
 
     const totalOI = protocols.reduce((sum, p) => sum + p.totalOI, 0);
     const totalVolume24h = protocols.reduce((sum, p) => sum + p.volume24h, 0);

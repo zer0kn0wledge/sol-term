@@ -30,6 +30,7 @@ export interface WalletProfile {
   address: string;
   identity: { name: string; avatar: string | null } | null;
   solBalance: number;
+  solPrice: number;
   tokenHoldings: TokenHolding[];
   transactions: WalletTransaction[];
   protocolInteractions: ProtocolInteraction[];

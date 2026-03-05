@@ -9,11 +9,14 @@ import type {
 import { computeWalletScore } from '@/lib/scoring';
 import { DEX_PROGRAMS } from '@/lib/constants';
 
-const HELIUS_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
 
+function getHeliusUrl() {
+  return `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+}
+
 async function rpcCall(method: string, params: unknown[]) {
-  const res = await fetch(HELIUS_URL, {
+  const res = await fetch(getHeliusUrl(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
@@ -98,7 +101,7 @@ async function fetchTransactions(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactions: signatures }),
+        body: JSON.stringify(signatures),
       },
     );
     parsed = await res.json();
@@ -155,18 +158,9 @@ async function fetchTransactions(
   return { transactions, protocols, funding };
 }
 
-async function fetchIdentity(address: string) {
-  try {
-    const result = await rpcCall('getAsset', [{ id: address }]);
-    if (result?.content?.metadata?.name) {
-      return {
-        name: result.content.metadata.name,
-        avatar: result.content.links?.image ?? null,
-      };
-    }
-  } catch {
-    // Not an asset / no identity
-  }
+async function fetchIdentity(_address: string) {
+  // getAsset only works for token/NFT mints, not wallet addresses.
+  // Identity resolution would require a dedicated service (e.g. SNS/.sol domains).
   return null;
 }
 
@@ -203,6 +197,7 @@ export async function GET(request: NextRequest) {
     address,
     identity,
     solBalance,
+    solPrice,
     tokenHoldings,
     transactions: txData.transactions,
     protocolInteractions: txData.protocols,

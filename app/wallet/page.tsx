@@ -65,7 +65,7 @@ function WalletContent() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="space-y-4">
-              <WalletOverview profile={profile} solPrice={0} />
+              <WalletOverview profile={profile} solPrice={profile.solPrice} />
               <WalletScoreCard profile={profile} />
             </div>
             <div className="lg:col-span-2">

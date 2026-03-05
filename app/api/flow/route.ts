@@ -53,7 +53,7 @@ async function fetchDexTransactions(apiKey: string, windowSec: number): Promise<
       const parseRes = await fetch(parseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactions: batch }),
+        body: JSON.stringify(batch),
       });
       const parsed = await parseRes.json();
       if (Array.isArray(parsed)) {
