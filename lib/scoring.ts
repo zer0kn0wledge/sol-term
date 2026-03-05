@@ -21,9 +21,7 @@ function diversityScore(profile: WalletProfile): number {
 }
 
 function holdingsScore(profile: WalletProfile): number {
-  const totalUsd =
-    profile.tokenHoldings.reduce((sum, t) => sum + t.usdValue, 0) +
-    profile.solBalance; // rough estimate; SOL price already factored in API
+  const totalUsd = profile.totalUsdValue ?? 0;
   if (totalUsd >= 100000) return 100;
   if (totalUsd >= 10000) return 75;
   if (totalUsd >= 1000) return 50;
@@ -33,11 +31,9 @@ function holdingsScore(profile: WalletProfile): number {
 
 function originScore(profile: WalletProfile): number {
   if (!profile.fundingSource) return 20;
-  const known = ['Coinbase', 'Binance', 'Kraken', 'FTX', 'Phantom', 'Solflare'];
-  const isKnown = known.some((k) =>
-    profile.fundingSource!.source.toLowerCase().includes(k.toLowerCase()),
-  );
-  return isKnown ? 100 : 50;
+  if (profile.fundingSource.sourceType === 'exchange') return 100;
+  if (profile.fundingSource.sourceName) return 75;
+  return 50;
 }
 
 export function computeWalletScore(profile: WalletProfile): number {

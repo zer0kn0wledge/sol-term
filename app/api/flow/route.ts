@@ -3,6 +3,8 @@ import { parseSwapEvents, aggregateFlows, generateSampleFlowData } from '@/lib/f
 import { DEX_PROGRAM_IDS } from '@/lib/dexPrograms';
 import { FlowData } from '@/types/flow';
 
+export const dynamic = 'force-dynamic';
+
 const WINDOW_SECONDS: Record<string, number> = {
   '1h': 3600,
   '6h': 21600,

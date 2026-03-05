@@ -12,9 +12,9 @@ interface Props {
 }
 
 export function WalletOverview({ profile, solPrice }: Props) {
-  const totalTokenUsd = profile.tokenHoldings.reduce((s, h) => s + h.usdValue, 0);
   const solUsd = profile.solBalance * solPrice;
-  const totalPortfolio = totalTokenUsd + solUsd;
+  const totalPortfolio = profile.totalUsdValue ?? 0;
+  const totalTokenUsd = totalPortfolio - solUsd;
 
   return (
     <DataCard title="Wallet Overview">
@@ -30,13 +30,20 @@ export function WalletOverview({ profile, solPrice }: Props) {
           <div className="font-mono text-lg text-terminal-text font-medium">
             {profile.identity?.name ?? shortAddr(profile.address, 6)}
           </div>
-          <AddressChip address={profile.address} chars={6} />
+          <div className="flex items-center gap-2">
+            <AddressChip address={profile.address} chars={6} />
+            {profile.identity?.category && (
+              <span className="text-[10px] font-mono text-terminal-accent uppercase">
+                {profile.identity.category}
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="space-y-0.5">
         <MetricRow label="SOL Balance" value={formatSOL(profile.solBalance)} />
         <MetricRow label="SOL Value" value={formatUSD(solUsd)} />
-        <MetricRow label="Token Holdings" value={formatUSD(totalTokenUsd)} />
+        <MetricRow label="Token Holdings" value={formatUSD(Math.max(totalTokenUsd, 0))} />
         <MetricRow label="Total Portfolio" value={formatUSD(totalPortfolio)} />
         <MetricRow label="Transactions" value={String(profile.transactions.length)} />
         <MetricRow label="Protocols Used" value={String(profile.protocolInteractions.length)} />

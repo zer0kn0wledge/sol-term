@@ -5,6 +5,7 @@ export interface TokenHolding {
   balance: number;
   usdValue: number;
   pctOfPortfolio: number;
+  imageUri?: string;
 }
 
 export interface WalletTransaction {
@@ -13,6 +14,7 @@ export interface WalletTransaction {
   timestamp: number;
   description: string;
   fee: number;
+  balanceChanges?: { mint: string; symbol: string; amount: number; decimals: number }[];
 }
 
 export interface ProtocolInteraction {
@@ -23,17 +25,39 @@ export interface ProtocolInteraction {
 
 export interface FundingInfo {
   source: string;
+  sourceName: string | null;
+  sourceType: string | null;
+  amount: number;
   intermediaries: string[];
+}
+
+export interface WalletTransfer {
+  signature: string;
+  timestamp: number;
+  direction: 'in' | 'out';
+  counterparty: string;
+  mint: string;
+  symbol: string;
+  amount: number;
+}
+
+export interface WalletIdentity {
+  name: string | null;
+  category: string | null;
+  type: string | null;
+  avatar: string | null;
 }
 
 export interface WalletProfile {
   address: string;
-  identity: { name: string; avatar: string | null } | null;
+  identity: WalletIdentity | null;
   solBalance: number;
   solPrice: number;
+  totalUsdValue: number;
   tokenHoldings: TokenHolding[];
   transactions: WalletTransaction[];
   protocolInteractions: ProtocolInteraction[];
   fundingSource: FundingInfo | null;
+  transfers: WalletTransfer[];
   score: number;
 }

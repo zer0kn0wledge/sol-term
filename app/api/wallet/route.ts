@@ -1,218 +1,178 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type {
-  WalletProfile,
-  TokenHolding,
-  WalletTransaction,
-  ProtocolInteraction,
-  FundingInfo,
-} from '@/types/wallet';
-import { computeWalletScore } from '@/lib/scoring';
-import { DEX_PROGRAMS } from '@/lib/constants';
 
-const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
+export const dynamic = 'force-dynamic';
 
-function getHeliusUrl() {
-  return `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
-}
+const HELIUS_BASE = 'https://api.helius.xyz';
 
-async function rpcCall(method: string, params: unknown[] | Record<string, unknown>) {
-  const res = await fetch(getHeliusUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error.message);
-  return json.result;
-}
-
-async function fetchSolPrice(): Promise<number> {
-  try {
-    const res = await fetch(
-      `${JUPITER_PRICE_URL}?ids=So11111111111111111111111111111111111111112`,
-    );
-    const json = await res.json();
-    return Number(json.data?.['So11111111111111111111111111111111111111112']?.price ?? 0);
-  } catch {
-    return 0;
-  }
-}
-
-async function fetchBalance(address: string): Promise<number> {
-  const result = await rpcCall('getBalance', [address]);
-  return (result?.value ?? 0) / 1e9;
-}
-
-async function fetchAssets(address: string): Promise<TokenHolding[]> {
-  const result = await rpcCall('getAssetsByOwner', {
-    ownerAddress: address,
-    page: 1,
-    limit: 100,
-    displayOptions: { showFungible: true, showNativeBalance: false },
-  });
-
-  const items = result?.items ?? [];
-  const holdings: TokenHolding[] = [];
-
-  for (const item of items) {
-    if (item.interface !== 'FungibleToken' && item.interface !== 'FungibleAsset') continue;
-    const info = item.token_info;
-    if (!info) continue;
-
-    const balance = (info.balance ?? 0) / Math.pow(10, info.decimals ?? 0);
-    const pricePerToken = info.price_info?.price_per_token ?? 0;
-
-    holdings.push({
-      mint: item.id,
-      symbol: info.symbol ?? 'Unknown',
-      name: item.content?.metadata?.name ?? info.symbol ?? 'Unknown',
-      balance,
-      usdValue: balance * pricePerToken,
-      pctOfPortfolio: 0,
-    });
-  }
-
-  const totalUsd = holdings.reduce((s, h) => s + h.usdValue, 0);
-  if (totalUsd > 0) {
-    for (const h of holdings) {
-      h.pctOfPortfolio = (h.usdValue / totalUsd) * 100;
-    }
-  }
-
-  return holdings.sort((a, b) => b.usdValue - a.usdValue);
-}
-
-async function fetchTransactions(
-  address: string,
-): Promise<{ transactions: WalletTransaction[]; protocols: ProtocolInteraction[]; funding: FundingInfo | null }> {
-  const sigs = await rpcCall('getSignaturesForAddress', [address, { limit: 50 }]);
-  const signatures = (sigs ?? []).map((s: { signature: string }) => s.signature);
-
-  if (signatures.length === 0) {
-    return { transactions: [], protocols: [], funding: null };
-  }
-
-  let parsed: unknown[] = [];
-  try {
-    const res = await fetch(
-      `https://api.helius.xyz/v0/transactions/?api-key=${process.env.HELIUS_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(signatures),
-      },
-    );
-    parsed = await res.json();
-  } catch {
-    // Fall back to raw signatures
-  }
-
-  const protocolMap = new Map<string, { count: number; lastUsed: number }>();
-  const transactions: WalletTransaction[] = [];
-  let funding: FundingInfo | null = null;
-
-  for (const tx of parsed as Record<string, unknown>[]) {
-    const type = (tx.type as string) ?? 'UNKNOWN';
-    const timestamp = (tx.timestamp as number) ?? 0;
-    const description = (tx.description as string) ?? '';
-    const fee = (tx.fee as number) ?? 0;
-    const sig = (tx.signature as string) ?? '';
-
-    transactions.push({
-      signature: sig,
-      type,
-      timestamp,
-      description,
-      fee: fee / 1e9,
-    });
-
-    // Track protocol interactions from program IDs
-    const programIds = (tx.accountData as { account: string }[])?.map((a) => a.account) ?? [];
-    for (const [progId, name] of Object.entries(DEX_PROGRAMS)) {
-      if (programIds.includes(progId) || description.toLowerCase().includes(name.toLowerCase())) {
-        const existing = protocolMap.get(name);
-        if (existing) {
-          existing.count++;
-          existing.lastUsed = Math.max(existing.lastUsed, timestamp);
-        } else {
-          protocolMap.set(name, { count: 1, lastUsed: timestamp });
-        }
-      }
-    }
-
-    // Detect funding source from first TRANSFER to this address
-    if (type === 'TRANSFER' && !funding) {
-      const source = (tx.sourceWallet as string) ?? '';
-      if (source && source !== address) {
-        funding = { source, intermediaries: [] };
-      }
-    }
-  }
-
-  const protocols: ProtocolInteraction[] = Array.from(protocolMap.entries())
-    .map(([protocol, data]) => ({ protocol, ...data }))
-    .sort((a, b) => b.count - a.count);
-
-  return { transactions, protocols, funding };
-}
-
-async function fetchIdentity(_address: string) {
-  // getAsset only works for token/NFT mints, not wallet addresses.
-  // Identity resolution would require a dedicated service (e.g. SNS/.sol domains).
-  return null;
+async function fetchJson(url: string) {
+  const res = await fetch(url);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Helius ${res.status}: ${res.statusText}`);
+  return res.json();
 }
 
 export async function GET(request: NextRequest) {
   const address = request.nextUrl.searchParams.get('address');
   if (!address) {
-    return NextResponse.json({ error: 'address parameter required' }, { status: 400 });
+    return NextResponse.json({ error: 'address required' }, { status: 400 });
   }
-
-  // Validate base58 format (32-44 chars)
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
     return NextResponse.json({ error: 'Invalid Solana address' }, { status: 400 });
   }
 
-  const [balanceResult, assetsResult, txResult, identityResult, solPriceResult] =
+  const key = process.env.HELIUS_API_KEY;
+  if (!key) {
+    return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+  }
+
+  const [balancesRes, historyRes, identityRes, fundingRes, transfersRes] =
     await Promise.allSettled([
-      fetchBalance(address),
-      fetchAssets(address),
-      fetchTransactions(address),
-      fetchIdentity(address),
-      fetchSolPrice(),
+      fetchJson(
+        `${HELIUS_BASE}/v1/wallet/${address}/balances?api-key=${key}&showNative=true&limit=100`,
+      ),
+      fetchJson(`${HELIUS_BASE}/v1/wallet/${address}/history?api-key=${key}&limit=50`),
+      fetchJson(`${HELIUS_BASE}/v1/wallet/${address}/identity?api-key=${key}`),
+      fetchJson(`${HELIUS_BASE}/v1/wallet/${address}/funded-by?api-key=${key}`),
+      fetchJson(`${HELIUS_BASE}/v1/wallet/${address}/transfers?api-key=${key}&limit=50`),
     ]);
 
-  const solBalance = balanceResult.status === 'fulfilled' ? balanceResult.value : 0;
-  const tokenHoldings = assetsResult.status === 'fulfilled' ? assetsResult.value : [];
-  const txData =
-    txResult.status === 'fulfilled'
-      ? txResult.value
-      : { transactions: [], protocols: [], funding: null };
-  const identity = identityResult.status === 'fulfilled' ? identityResult.value : null;
-  const solPrice = solPriceResult.status === 'fulfilled' ? solPriceResult.value : 0;
+  // Parse balances
+  const balancesData = balancesRes.status === 'fulfilled' ? balancesRes.value : null;
+  const nativeBalance = (balancesData?.balances ?? []).find(
+    (b: Record<string, unknown>) =>
+      b.mint === 'So11111111111111111111111111111111111111112' || b.isNative,
+  );
+  const solBalance = (nativeBalance?.balance as number) ?? 0;
+  const solPrice = (nativeBalance?.pricePerToken as number) ?? 0;
+  const totalUsdValue = (balancesData?.totalUsdValue as number) ?? 0;
 
-  const profile: WalletProfile = {
+  const tokenHoldings = ((balancesData?.balances ?? []) as Record<string, unknown>[])
+    .filter((b) => !b.isNative && (b.balance as number) > 0)
+    .map((b) => ({
+      mint: (b.mint as string) ?? '',
+      symbol: (b.symbol as string) ?? '???',
+      name: (b.name as string) ?? (b.symbol as string) ?? 'Unknown',
+      balance: (b.balance as number) ?? 0,
+      usdValue: (b.usdValue as number) ?? 0,
+      pctOfPortfolio:
+        totalUsdValue > 0 ? (((b.usdValue as number) ?? 0) / totalUsdValue) * 100 : 0,
+      imageUri: (b.imageUri as string) ?? '',
+    }))
+    .sort((a, b) => b.usdValue - a.usdValue);
+
+  // Parse history
+  const historyData = historyRes.status === 'fulfilled' ? historyRes.value : null;
+  const transactions = ((historyData?.data ?? []) as Record<string, unknown>[]).map((tx) => ({
+    signature: (tx.signature as string) ?? '',
+    type: (tx.type as string) ?? 'UNKNOWN',
+    timestamp: tx.timestamp ? Math.floor(new Date(tx.timestamp as string).getTime() / 1000) : 0,
+    description: (tx.description as string) ?? '',
+    fee: ((tx.fee as number) ?? 0) / 1e9,
+    balanceChanges: (tx.balanceChanges as Record<string, unknown>[]) ?? [],
+  }));
+
+  // Parse identity (404 = unknown wallet, normal)
+  const identityData = identityRes.status === 'fulfilled' ? identityRes.value : null;
+  const identity = identityData
+    ? {
+        name: (identityData.name as string) ?? null,
+        category: (identityData.category as string) ?? null,
+        type: (identityData.type as string) ?? null,
+        avatar: null,
+      }
+    : null;
+
+  // Parse funding source (404 = no funding found, normal)
+  const fundingData = fundingRes.status === 'fulfilled' ? fundingRes.value : null;
+  const fundingSource = fundingData
+    ? {
+        source: (fundingData.funder as string) ?? '',
+        sourceName: (fundingData.funderName as string) ?? null,
+        sourceType: (fundingData.funderType as string) ?? null,
+        amount: (fundingData.amount as number) ?? 0,
+        intermediaries: [] as string[],
+      }
+    : null;
+
+  // Parse transfers
+  const transfersData = transfersRes.status === 'fulfilled' ? transfersRes.value : null;
+  const transfers = ((transfersData?.data ?? []) as Record<string, unknown>[])
+    .slice(0, 20)
+    .map((t) => ({
+      signature: (t.signature as string) ?? '',
+      timestamp: (t.timestamp as number) ?? 0,
+      direction: (t.direction as string) ?? 'in',
+      counterparty: (t.counterparty as string) ?? '',
+      mint: (t.mint as string) ?? '',
+      symbol: (t.symbol as string) ?? '',
+      amount: (t.amount as number) ?? 0,
+    }));
+
+  // Build protocol interactions from history source field
+  const protocolMap = new Map<string, { count: number; lastUsed: number }>();
+  for (const tx of (historyData?.data ?? []) as Record<string, unknown>[]) {
+    const source = (tx.source as string) ?? '';
+    if (source && source !== 'UNKNOWN' && source !== 'SYSTEM_PROGRAM') {
+      const ts = tx.timestamp
+        ? Math.floor(new Date(tx.timestamp as string).getTime() / 1000)
+        : 0;
+      const existing = protocolMap.get(source);
+      if (existing) {
+        existing.count++;
+        existing.lastUsed = Math.max(existing.lastUsed, ts);
+      } else {
+        protocolMap.set(source, { count: 1, lastUsed: ts });
+      }
+    }
+  }
+  const protocolInteractions = Array.from(protocolMap.entries())
+    .map(([protocol, data]) => ({ protocol, ...data }))
+    .sort((a, b) => b.count - a.count);
+
+  // Compute wallet score
+  const activityScore = Math.min(
+    (transactions.length / 50) * 60 + (transactions.length > 0 ? 30 : 0),
+    100,
+  );
+  const diversityScore = Math.min(
+    (tokenHoldings.length / 10) * 50 + (protocolInteractions.length / 5) * 50,
+    100,
+  );
+  const holdingsScore =
+    totalUsdValue >= 100000
+      ? 100
+      : totalUsdValue >= 10000
+        ? 75
+        : totalUsdValue >= 1000
+          ? 50
+          : totalUsdValue >= 100
+            ? 25
+            : 10;
+  const originScore =
+    fundingSource?.sourceType === 'exchange' ? 100 : fundingSource ? 50 : 20;
+  const score = Math.round(
+    Math.min(
+      Math.max(
+        activityScore * 0.3 + diversityScore * 0.25 + holdingsScore * 0.25 + originScore * 0.2,
+        0,
+      ),
+      100,
+    ),
+  );
+
+  const profile = {
     address,
     identity,
     solBalance,
     solPrice,
+    totalUsdValue,
     tokenHoldings,
-    transactions: txData.transactions,
-    protocolInteractions: txData.protocols,
-    fundingSource: txData.funding,
-    score: 0,
+    transactions,
+    protocolInteractions,
+    fundingSource,
+    transfers,
+    score,
   };
-
-  // Adjust holdings percentages to include SOL value
-  const solUsdValue = solBalance * solPrice;
-  const totalPortfolioUsd = tokenHoldings.reduce((s, h) => s + h.usdValue, 0) + solUsdValue;
-  if (totalPortfolioUsd > 0) {
-    for (const h of profile.tokenHoldings) {
-      h.pctOfPortfolio = (h.usdValue / totalPortfolioUsd) * 100;
-    }
-  }
-
-  profile.score = computeWalletScore(profile);
 
   return NextResponse.json(profile);
 }

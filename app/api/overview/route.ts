@@ -13,6 +13,11 @@ interface SolanaOverview {
   solChange24h: number;
   solMarketCap: number;
   solVolume24h: number;
+  solSupply: {
+    total: number;
+    circulating: number;
+    nonCirculating: number;
+  };
   topTokens: Array<{
     symbol: string;
     name: string;
@@ -64,6 +69,7 @@ export async function GET() {
         body: JSON.stringify([
           { jsonrpc: '2.0', id: 1, method: 'getRecentPerformanceSamples', params: [1] },
           { jsonrpc: '2.0', id: 2, method: 'getEpochInfo' },
+          { jsonrpc: '2.0', id: 3, method: 'getSupply' },
         ]),
       }),
       // Jupiter prices for top tokens
@@ -74,18 +80,27 @@ export async function GET() {
       fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_vol=true&include_24hr_change=true&include_market_cap=true'),
     ]);
 
-    // Parse network
+    // Parse network + supply
     let network = { tps: 0, slot: 0, epoch: 0, blockHeight: 0 };
+    let solSupply = { total: 0, circulating: 0, nonCirculating: 0 };
     if (networkRes.status === 'fulfilled') {
       const results = await networkRes.value.json();
       const perf = results[0]?.result?.[0];
       const epochInfo = results[1]?.result;
+      const supplyInfo = results[2]?.result?.value;
       network = {
         tps: perf ? Math.round(perf.numTransactions / perf.samplePeriodSecs) : 0,
         slot: epochInfo?.absoluteSlot ?? 0,
         epoch: epochInfo?.epoch ?? 0,
         blockHeight: epochInfo?.blockHeight ?? 0,
       };
+      if (supplyInfo) {
+        solSupply = {
+          total: Number(supplyInfo.total ?? 0) / 1e9,
+          circulating: Number(supplyInfo.circulating ?? 0) / 1e9,
+          nonCirculating: Number(supplyInfo.nonCirculating ?? 0) / 1e9,
+        };
+      }
     }
 
     // Parse SOL CoinGecko
@@ -102,11 +117,24 @@ export async function GET() {
     }
 
     // Parse Jupiter prices
-    const topTokens: SolanaOverview['topTokens'] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let jupData: any = null;
     if (jupPriceRes.status === 'fulfilled') {
-      const jup = await jupPriceRes.value.json();
+      jupData = await jupPriceRes.value.json();
+    }
+
+    // Fallback: if CoinGecko rate-limited, use Jupiter price for SOL
+    if (solPrice === 0 && jupData) {
+      const solJup = jupData.data?.['So11111111111111111111111111111111111111112'];
+      if (solJup?.price) {
+        solPrice = Number(solJup.price);
+      }
+    }
+
+    const topTokens: SolanaOverview['topTokens'] = [];
+    if (jupData) {
       for (const mint of TOP_MINTS) {
-        const info = jup.data?.[mint];
+        const info = jupData.data?.[mint];
         if (!info) continue;
         const meta = TOKEN_META[mint];
         if (!meta) continue;
@@ -137,6 +165,7 @@ export async function GET() {
       solChange24h,
       solMarketCap,
       solVolume24h,
+      solSupply,
       topTokens,
       defiTvl,
       defiChange24h,
@@ -148,6 +177,7 @@ export async function GET() {
     return NextResponse.json({
       network: { tps: 0, slot: 0, epoch: 0, blockHeight: 0 },
       solPrice: 0, solChange24h: 0, solMarketCap: 0, solVolume24h: 0,
+      solSupply: { total: 0, circulating: 0, nonCirculating: 0 },
       topTokens: [], defiTvl: 0, defiChange24h: 0,
     });
   }
