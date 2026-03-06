@@ -10,6 +10,13 @@ export interface HolderData {
   pctOfSupply: number;
 }
 
+export interface DeployerInfo {
+  address: string;
+  identity: string | null;
+  category: string | null;
+  tokenCount: number;
+}
+
 export interface TokenProfile {
   mint: string;
   name: string;
@@ -24,4 +31,5 @@ export interface TokenProfile {
   deployedAt: number;
   riskScore: RiskScore;
   topHolders: HolderData[];
+  deployerInfo?: DeployerInfo;
 }

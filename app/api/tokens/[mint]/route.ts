@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { TokenProfile, RiskScore, HolderData } from '@/types/token';
+import type { TokenProfile, RiskScore, HolderData, DeployerInfo } from '@/types/token';
 
 export const dynamic = 'force-dynamic';
 
 const HELIUS_RPC = () =>
   `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
-async function rpcCall(method: string, params: any) {
+async function rpcCall(method: string, params: Record<string, any>) {
   const res = await fetch(HELIUS_RPC(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -64,22 +64,29 @@ async function getDeployerHistory(deployer: string): Promise<number> {
   }
 }
 
-async function getCreationSignature(mint: string): Promise<number> {
+async function getDeployerIdentity(
+  deployer: string
+): Promise<{ name: string | null; category: string | null }> {
+  if (!deployer) return { name: null, category: null };
+  const key = process.env.HELIUS_API_KEY;
+  if (!key) return { name: null, category: null };
   try {
-    const result = await rpcCall('getSignaturesForAsset', {
-      id: mint,
-      limit: 1,
-      sortDirection: 'asc',
-    });
-    const sig = result?.items?.[0];
-    if (!sig) return 0;
+    const res = await fetch(
+      `https://api.helius.xyz/v1/wallet/${deployer}/identity?api-key=${key}`
+    );
+    if (!res.ok) return { name: null, category: null };
+    const data = await res.json();
+    return { name: data.name ?? null, category: data.category ?? null };
+  } catch {
+    return { name: null, category: null };
+  }
+}
 
-    // Get the transaction to find the block time
-    const tx = await rpcCall('getTransaction', {
-      signature: sig[0],
-      maxSupportedTransactionVersion: 0,
-    });
-    return tx?.blockTime ?? 0;
+async function getJupiterPrice(mint: string): Promise<number> {
+  try {
+    const res = await fetch(`https://api.jup.ag/price/v2?ids=${mint}`);
+    const data = await res.json();
+    return Number(data.data?.[mint]?.price ?? 0);
   } catch {
     return 0;
   }
@@ -93,19 +100,16 @@ function computeRiskScore(
   const factors: string[] = [];
   let score = 100;
 
-  // Mint authority
   if (asset.authorities?.some((a: any) => a.scopes?.includes('mint') && a.address)) {
     factors.push('Mint authority enabled');
     score -= 25;
   }
 
-  // Freeze authority
   if (asset.authorities?.some((a: any) => a.scopes?.includes('freeze') && a.address)) {
     factors.push('Freeze authority enabled');
     score -= 20;
   }
 
-  // Holder concentration
   if (holders.length > 0) {
     const topPct = holders[0]?.pctOfSupply ?? 0;
     if (topPct > 50) {
@@ -117,13 +121,11 @@ function computeRiskScore(
     }
   }
 
-  // Deployer history
   if (deployerTokenCount > 10) {
     factors.push(`Deployer created ${deployerTokenCount} tokens`);
     score -= 15;
   }
 
-  // Missing metadata
   if (!asset.content?.metadata?.name) {
     factors.push('Missing metadata');
     score -= 10;
@@ -147,11 +149,11 @@ export async function GET(
 
     const { mint } = params;
 
-    // Parallel fetches
-    const [asset, holders, deployedAt] = await Promise.all([
+    // Phase 1: parallel fetches that don't depend on each other
+    const [asset, holders, price] = await Promise.all([
       getAsset(mint),
       getTokenHolders(mint),
-      getCreationSignature(mint),
+      getJupiterPrice(mint),
     ]);
 
     if (!asset) {
@@ -159,21 +161,25 @@ export async function GET(
     }
 
     const deployer = asset.authorities?.[0]?.address ?? '';
-    const deployerTokenCount = await getDeployerHistory(deployer);
 
-    // Jupiter price
-    let price = 0;
-    try {
-      const priceRes = await fetch(`https://api.jup.ag/price/v2?ids=${mint}`);
-      const priceData = await priceRes.json();
-      price = Number(priceData.data?.[mint]?.price ?? 0);
-    } catch {}
+    // Phase 2: deployer-dependent fetches in parallel
+    const [deployerTokenCount, deployerIdentity] = await Promise.all([
+      getDeployerHistory(deployer),
+      getDeployerIdentity(deployer),
+    ]);
 
     const meta = asset.content?.metadata ?? {};
     const supply = asset.token_info?.supply
       ? Number(asset.token_info.supply) /
         Math.pow(10, asset.token_info.decimals ?? 0)
       : 0;
+
+    const deployerInfo: DeployerInfo = {
+      address: deployer,
+      identity: deployerIdentity.name,
+      category: deployerIdentity.category,
+      tokenCount: deployerTokenCount,
+    };
 
     const token: TokenProfile = {
       mint,
@@ -186,11 +192,12 @@ export async function GET(
       marketCap: supply * price,
       image: asset.content?.links?.image ?? asset.content?.files?.[0]?.uri ?? '',
       deployer,
-      deployedAt: deployedAt || (asset.created_at
+      deployedAt: asset.created_at
         ? Math.floor(new Date(asset.created_at).getTime() / 1000)
-        : 0),
+        : 0,
       riskScore: computeRiskScore(asset, holders, deployerTokenCount),
       topHolders: holders,
+      deployerInfo,
     };
 
     return NextResponse.json(token);

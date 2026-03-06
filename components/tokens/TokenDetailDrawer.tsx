@@ -142,6 +142,9 @@ export function TokenDetailDrawer({ mint, onClose }: TokenDetailDrawerProps) {
                 <DeployerProfile
                   deployer={token.deployer}
                   deployedAt={token.deployedAt}
+                  tokenCount={token.deployerInfo?.tokenCount}
+                  identity={token.deployerInfo?.identity ?? undefined}
+                  category={token.deployerInfo?.category ?? undefined}
                 />
               )}
 

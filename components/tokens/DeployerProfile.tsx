@@ -7,9 +7,11 @@ interface DeployerProfileProps {
   deployer: string;
   deployedAt: number;
   tokenCount?: number;
+  identity?: string;
+  category?: string;
 }
 
-export function DeployerProfile({ deployer, deployedAt, tokenCount }: DeployerProfileProps) {
+export function DeployerProfile({ deployer, deployedAt, tokenCount, identity, category }: DeployerProfileProps) {
   if (!deployer) {
     return (
       <div className="text-sm text-terminal-text-dim font-mono text-center py-8">
@@ -26,6 +28,20 @@ export function DeployerProfile({ deployer, deployedAt, tokenCount }: DeployerPr
         </div>
         <AddressChip address={deployer} chars={6} />
       </div>
+
+      {identity && (
+        <div className="flex items-center justify-between py-1.5">
+          <span className="text-sm text-terminal-text-dim">Identity</span>
+          <span className="text-sm font-mono text-terminal-accent">{identity}</span>
+        </div>
+      )}
+
+      {category && (
+        <div className="flex items-center justify-between py-1.5">
+          <span className="text-sm text-terminal-text-dim">Category</span>
+          <span className="text-sm font-mono text-terminal-text">{category}</span>
+        </div>
+      )}
 
       {deployedAt > 0 && (
         <div className="flex items-center justify-between py-1.5">
